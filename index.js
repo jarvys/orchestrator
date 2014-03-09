@@ -110,6 +110,23 @@ Orchestrator.prototype.start = function() {
 			if (this.tasks.hasOwnProperty(i)) {
 				names.push(this.tasks[i].name);
 			}
+			for (i = 0; i < args.length; i++) {
+				arg = args[i];
+				if (typeof arg === 'string') {
+					names.push(arg);
+				} else if (Array.isArray(arg)) {
+					names = names.concat(arg); // FRAGILE: ASSUME: it's an array of strings
+				} else {
+					throw new Error('pass strings or arrays of strings');
+				}
+			}
+		}
+		if (this.isRunning) {
+			// reset specified tasks (and dependencies) as not run
+			this._resetSpecificTasks(names);
+		} else {
+			// reset all tasks as not run
+			this._resetAllTasks();
 		}
 	}
 	seq = [];
