@@ -19,18 +19,28 @@ var orchestrator = new Orchestrator();
 ### 2. Load it up with stuff to do:
 
 ```javascript
-orchestrator.add('thing1', function(){
+orchestrator.task('thing1', function(cb){
   // do stuff
+  cb(null);
 });
-orchestrator.add('thing2', function(){
+orchestrator.task('thing2', function(cb){
   // do stuff
+  cb(null);
 });
 ```
 
-### 3. Run the tasks:
+### 3. Run the tasks in maximum concurrency:
 
 ```javascript
-orchestrator.start('thing1', 'thing2', function (err) {
+orchestrator.runParallel('thing1', 'thing2', function (err, stats) {
+  // all done
+});
+```
+
+or run the tasks in sequence (slower):
+
+```javascript
+orchestrator.runSeries('thing1', 'thing2', function (err, stats) {
   // all done
 });
 ```
@@ -38,13 +48,14 @@ orchestrator.start('thing1', 'thing2', function (err) {
 API
 ---
 
-### orchestrator.add(name[, deps][, function]);
+### orchestrator.task(name[, deps][, function]);
 
 Define a task
 
 ```javascript
-orchestrator.add('thing1', function(){
+orchestrator.task('thing1', function(callback){
   // do stuff
+  callback(null);
 });
 ```
 
@@ -59,7 +70,7 @@ Type: `Array`
 An array of task names to be executed and completed before your task will run.
 
 ```javascript
-orchestrator.add('mytask', ['array', 'of', 'task', 'names'], function() {
+orchestrator.task('mytask', ['array', 'of', 'task', 'names'], function() {
   // Do stuff
 });
 ```
@@ -70,7 +81,7 @@ are correctly using the async run hints: take in a callback or return a promise 
 #### fn
 Type: `function`
 
-The function that performs the task's operations.  For asynchronous tasks, you need to provide a hint when the task is complete:
+The function that performs the task's operations.  You **must** provide a hint when the task is complete:
 
 - Take in a callback
 - Return a stream or a promise
@@ -80,7 +91,7 @@ The function that performs the task's operations.  For asynchronous tasks, you n
 **Accept a callback:**
 
 ```javascript
-orchestrator.add('thing2', function(callback){
+orchestrator.task('thing2', function(callback){
   // do stuff
   callback(err);
 });
@@ -91,7 +102,7 @@ orchestrator.add('thing2', function(callback){
 ```javascript
 var Q = require('q');
 
-orchestrator.add('thing3', function(){
+orchestrator.task('thing3', function(){
   var deferred = Q.defer();
 
   // do async stuff
@@ -108,7 +119,7 @@ orchestrator.add('thing3', function(){
 ```javascript
 var map = require('map-stream');
 
-orchestrator.add('thing4', function(){
+orchestrator.task('thing4', function(){
   var stream = map(function (args, cb) {
     cb(null, args);
   });
@@ -118,10 +129,10 @@ orchestrator.add('thing4', function(){
 ```
 
 **Note:** By default, tasks run with maximum concurrency -- e.g. it launches all the tasks at once and waits for nothing.
-If you want to create a series where tasks run in a particular order, you need to do two things:
+If you want to create a series where tasks run in a particular order, you need to either:
 
-- give it a hint to tell it when the task is done,
-- and give it a hint that a task depends on completion of another.
+- give it a hint that a task depends on completion of another
+- or use `#series()`
 
 For these examples, let's presume you have two tasks, "one" and "two" that you specifically want to run in this order:
 
@@ -137,17 +148,17 @@ var Orchestrator = require('orchestrator');
 var orchestrator = new Orchestrator();
 
 // takes in a callback so the engine knows when it'll be done
-orchestrator.add('one', function (cb) {
+orchestrator.task('one', function (cb) {
     // do stuff -- async or otherwise
-    cb(err); // if err is not null or undefined, the orchestration will stop, and note that it failed
+    cb(err); // if err is not null and not undefined, the orchestration will stop, and 'two' will not run
 });
 
 // identifies a dependent task must be complete before this one begins
-orchestrator.add('two', ['one'], function () {
+orchestrator.task('two', ['one'], function () {
     // task 'one' is done now
 });
 
-orchestrator.start('one', 'two');
+orchestrator.run('one', 'two');
 ```
 
 ### orchestrator.hasTask(name);
@@ -159,33 +170,128 @@ Type: `String`
 
 The task name to query
 
-### orchestrator.start(tasks...[, cb]);
+#### returns `Bool`
+
+Is there a task?
+
+### orchestrator.parallel('array','of','task','names');
+
+Create a task builder that will run a set of tasks in maximum concurrency, respecting task dependencies (see above)
+
+#### task names
+Type: `String`
+
+The name of each task to run
+
+#### returns
+Type: TaskBuilder
+
+Pass the results into another task builder (`#series()` or `#parallel()`) or into `run()`
+
+```js
+// parallel run task1 and task2 and task3, and as soon as task3 is done, run task4, and when task1, task2, and task4 are done, call the callback
+var nestedBuilder = orchestrator.series('task3', 'task4');
+var builder = orchestrator.parallel('task1, 'task2', nestedBuilder);
+orchestrator.run(builder, function (err, stats) {
+```
+
+### orchestrator.series('array','of','task','names');
+
+Create a task builder that will run a set of tasks in series, respecting task dependencies (see above)
+
+#### task names
+Type: `String`
+
+The name of each task to run
+
+#### returns
+Type: TaskBuilder
+
+Pass the results into another task builder (`#series()` or `#parallel()`) or into `run()`
+
+```js
+// run task 1 then task2 then in parallel, run task3 and task4, and call the callback when all are done
+var nestedBuilder = orchestrator.parallel('task3', 'task4');
+var builder = orchestrator.series('task1, 'task2', nestedBuilder);
+orchestrator.run(builder, function (err, stats) {
+```
+
+### orchestrator.runParallel('array','of','tasks'[, cb]);
+
+Sugar for calling `.parallel()` and passing the results to `.run()`
+
+```js
+orchestrator.runParallel('task1', 'task2', function (err, stats) {
+```
+is identical to
+```js
+var builder = orchestrator.parallel('task1, 'task2');
+orchestrator.run(builder, function (err, stats) {
+```
+
+### orchestrator.runSeries('array','of','tasks'[, cb]);
+
+Sugar for calling `.series()` and passing the results to `.run()`
+
+```js
+orchestrator.runSeries('task1', 'task2', function (err, stats) {
+```
+is identical to
+```js
+var builder = orchestrator.series('task1, 'task2');
+orchestrator.run(builder, function (err, stats) {
+```
+
+### orchestrator.run(builder[, options][, cb]);
 
 Start running the tasks
 
 #### tasks
-Type: `String` or `Array` of `String`s
+Type: `TaskBuilder`: created by `Orchestrator.series()` or `Orchestrator.parallel()`
 
-Tasks to be executed. You may pass any number of tasks as individual arguments.
+Tasks to be executed.
+
+#### options
+Type: `Object`
+
+{
+  continueOnError: false // default is false, set to true to not stop on taskError, good for watch tasks
+}
 
 #### cb
-Type: `function`: `function (err) {`
+Type: `function`: `function (err, stats) {`
 
 Callback to call after run completed.
 
-Passes single argument: `err`: did the orchestration succeed?
+Passes arguments:
 
-**Note:** Tasks run concurrently and therefore may not complete in order.
-**Note:** Orchestrator uses `sequencify` to resolve dependencies before running, and therefore may not start in order.
+1. `err`: error if orchestration failed
+
+Type: `Object`
+
+For missing tasks, `err` has `missingTasks` array of task names
+
+For recursive dependencies, `err` has `recursiveTasks` array of the recursive task sequence discovered
+
+2. `stats`: Type: `Object`
+
+```javascript
+{
+  tasks:[], // list of tasks that were queued to run
+  message:'succeeded' // a descriptive message
+  duration:[] // a process.hrDuration, require('pretty-hrtime') to turn it into words
+}
+```
+
+**Note:** Orchestrator uses [`async.auto`](https://github.com/caolan/async) to resolve dependencies, so tasks may not run in the specified order.
 Listen to orchestration events to watch task running.
 
 ```javascript
-orchestrator.start('thing1', 'thing2', 'thing3', 'thing4', function (err) {
+var builder = orchestrator.parallel('thing1', 'thing2', 'thing3', 'thing4');
+orchestrator.run(builder, function (err, stats) {
   // all done
+  console.log('ran '+stats.tasks.join(', ')+' in '+require('pretty-hrTime')(stats.duration));
 });
-```
-```javascript
-orchestrator.start(['thing1','thing2'], ['thing3','thing4']);
 ```
 
 **FRAGILE:** Orchestrator catches exceptions on sync runs to pass to your callback
@@ -193,34 +299,24 @@ but doesn't hook to process.uncaughtException so it can't pass those exceptions
 to your callback
 
 **FRAGILE:** Orchestrator will ensure each task and each dependency is run once during an orchestration run
-even if you specify it to run more than once. (e.g. `orchestrator.start('thing1', 'thing1')`
-will only run 'thing1' once.) If you need it to run a task multiple times, wait for
-the orchestration to end (start's callback) then call start again.
-(e.g. `orchestrator.start('thing1', function () {orchestrator.start('thing1');})`.)
+even if you specify it to run more than once. (e.g. `orchestrator.run(orchestrator.parallel('thing1', 'thing1'))`
+will only run 'thing1' once.) If you need it to run a task multiple times, call `.run()` a second time.
+(e.g. `orchestrator.runParallel('thing1', function () {orchestrator.runParallel('thing1');})`.)
 Alternatively create a second orchestrator instance.
 
-### orchestrator.stop()
-
-Stop an orchestration run currently in process
-
-**Note:** It will call the `start()` callback with an `err` noting the orchestration was aborted
+**Note:** Orchestrator descends from [`EventEmitter2`](https://github.com/asyncly/EventEmitter2). See EventEmitter2's [docs](https://github.com/asyncly/EventEmitter2) for more event listeners.
 
 ### orchestrator.on(event, cb);
 
-Listen to orchestrator internals
+Listen to orchestrator events
 
 #### event
 Type: `String`
 
 Event name to listen to:
-- start: from start() method, shows you the task sequence
-- stop: from stop() method, the queue finished successfully
-- err: from stop() method, the queue was aborted due to a task error
-- task_start: from _runTask() method, task was started
-- task_stop: from _runTask() method, task completed successfully
-- task_err: from _runTask() method, task errored
-- task_not_found: from start() method, you're trying to start a task that doesn't exist
-- task_recursion: from start() method, there are recursive dependencies in your task list
+- taskStart: task was started
+- taskError: task errored
+- taskEnd: task completed
 
 #### cb
 Type: `function`: `function (e) {`
@@ -228,34 +324,16 @@ Type: `function`: `function (e) {`
 Passes single argument: `e`: event details
 
 ```javascript
-orchestrator.on('task_start', function (e) {
+orchestrator.on('tasStart', function (e) {
   // e.message is the log message
   // e.task is the task name if the message applies to a task else `undefined`
-  // e.err is the error if event is 'err' else `undefined`
+  // e.err is the error if event is 'error' else `undefined`
 });
-// for task_end and task_err:
-orchestrator.on('task_stop', function (e) {
+// for taskEnd and taskErr:
+orchestrator.on('taskEnd', function (e) {
   // e is the same object from task_start
   // e.message is updated to show how the task ended
   // e.duration is the task run duration (in seconds)
-});
-```
-
-**Note:** fires either *stop or *err but not both.
-
-### orchestrator.onAll(cb);
-
-Listen to all orchestrator events from one callback
-
-#### cb
-Type: `function`: `function (e) {`
-
-Passes single argument: `e`: event details
-
-```javascript
-orchestrator.onAll(orchestrator, function (e) {
-  // e is the original event args
-  // e.src is event name
 });
 ```
 
@@ -264,7 +342,7 @@ LICENSE
 
 (MIT License)
 
-Copyright (c) 2013 [Richardson & Sons, LLC](http://richardsonandsons.com/)
+Copyright (c) 2014 [Richardson & Sons, LLC](http://richardsonandsons.com/)
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
